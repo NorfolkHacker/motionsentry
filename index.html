@@ -240,7 +240,7 @@
 
     /* ─── Alert banner & toast ───────────────────── */
     #alert-banner {
-      position: fixed; top: calc(var(--safe-t) + 80px); left: 50%;
+      position: fixed; top: calc(var(--safe-t) + 112px); left: 50%;
       transform: translateX(-50%) translateY(-10px); z-index: 100; pointer-events: none;
       background: rgba(8,15,9,0.92); border: 1px solid var(--red); border-radius: var(--r);
       padding: 10px 20px; font-family: var(--mono); font-size: 12px; color: var(--red); white-space: nowrap;
@@ -519,7 +519,7 @@ let stream = null, streaming = false, calibrated = false;
 let armState = 'off';           // off | arming | on
 let armTimer = null, armEndsAt = 0;
 let pw = 0, ph = 0, npx = 0;
-let luma, bg, cellOf, maskPx, cellPix, cellHits;
+let luma, prevLuma, heat, bg, cellOf, maskPx, cellPix, cellHits;
 let warmup = 0, consec = 0, lastLightingLog = 0;
 let motionHistory = [];
 let eventCount = 0, lastEventAt = null, inMotion = false, clearTimer = null, eventPeak = 0;
@@ -862,7 +862,7 @@ function setupProcessing(vw, vh) {
   pw = PROC_W; ph = Math.max(1, Math.round(PROC_W * vh / vw)); npx = pw * ph;
   procCanvas.width = diffCanvas.width = pw; procCanvas.height = diffCanvas.height = ph;
   diffImg = diffCtx.createImageData(pw, ph);
-  luma = new Uint8Array(npx); bg = new Float32Array(npx);
+  luma = new Uint8Array(npx); prevLuma = new Uint8Array(npx); heat = new Uint8Array(npx); bg = new Float32Array(npx);
   cellOf = new Uint16Array(npx); maskPx = new Uint8Array(npx);
   cellPix = new Uint32Array(GX * GY); cellHits = new Uint32Array(GX * GY);
   for (let y = 0; y < ph; y++) for (let x = 0; x < pw; x++)
@@ -944,6 +944,7 @@ function processFrame() {
   if (warmup < 6) {
     if (warmup === 0) for (let p = 0; p < npx; p++) bg[p] = luma[p];
     else for (let p = 0; p < npx; p++) bg[p] += (luma[p] - bg[p]) * 0.5;
+    prevLuma.set(luma); heat.fill(0);
     warmup++;
     if (warmup === 6 && !calibrated) {
       calibrated = true;
@@ -953,25 +954,31 @@ function processFrame() {
     drawOverlay(false); return;
   }
 
-  const thr = pixelThreshold();
+  const thr = pixelThreshold(), moveThr = thr * 0.5;
   const d = diffImg.data;
   let changedRaw = 0, active = 0;
   cellHits.fill(0);
   for (let p = 0, i = 0; p < npx; p++, i += 4) {
-    const l = luma[p], b = bg[p];
+    const l = luma[p], b = bg[p], q = prevLuma[p];
     const diff = l > b ? l - b : b - l;
-    if (maskPx[p]) { d[i + 3] = 0; bg[p] = b + (l - b) * 0.1; continue; }
+    const move = l > q ? l - q : q - l;
+    if (maskPx[p]) { d[i + 3] = 0; bg[p] = b + (l - b) * 0.1; heat[p] = 0; continue; }
     active++;
-    if (diff > thr) {
+    // moving now = differs from the background AND changed since the last frame;
+    // 'heat' holds it for a few frames so moving shapes read as solid blobs
+    if (diff > thr && move > moveThr) heat[p] = 4; else if (heat[p]) heat[p]--;
+    if (heat[p] && diff > thr) {
       changedRaw++; cellHits[cellOf[p]]++;
       const v = Math.min(255, diff * 3);
       d[i] = 0; d[i + 1] = v; d[i + 2] = v * 0.4; d[i + 3] = Math.min(220, v * 1.4);
-      bg[p] = b + (l - b) * 0.01;           // foreground: adapt very slowly
+      bg[p] = b + (l - b) * 0.02;           // moving: adapt slowly
     } else {
       d[i + 3] = 0;
-      bg[p] = b + (l - b) * 0.06;           // background: track gradual change
+      bg[p] = b + (l - b) * (diff > thr ? 0.04 : 0.06);   // still: absorb parked objects / track light
     }
   }
+
+  prevLuma.set(luma);
 
   // Sudden whole-scene change (lights switched, auto-exposure, camera knocked)
   const rawPct = active ? changedRaw / active * 100 : 0;

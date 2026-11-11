@@ -3,7 +3,7 @@
    - Serves from cache instantly, then refreshes the cache from the network
      in the background (stale-while-revalidate), so the next launch is current.
    - Bump VERSION on every release: the page sees the new worker and offers a reload. */
-const VERSION = 'v3.0.0';
+const VERSION = 'v3.0.1';
 const CACHE = `motionsentry-${VERSION}`;
 const ASSETS = [
   './',
